@@ -2,104 +2,108 @@ import threading
 import time
 import random
 
-# Solução 1: Escritores esperam indefinidamente enquanto há leitores
-class ReadersWritersSolution1:
-    def __init__(self):
-        self.read_count = 0
-        self.read_count_lock = threading.Lock()
-        self.resource_lock = threading.Lock()
+# Variáveis globais
+read_count = 0           # Contador de leitores
+mutex = threading.Lock()  # Lock para o contador de leitores
+wrt = threading.Lock()    # Lock para escritores
+fair_lock = threading.Lock()  # Lock extra para evitar starvation
+turn = threading.Condition()  # Condição para o acesso justo
+total_accesses = 5         # Quantidade de acessos para cada leitor/escritor
 
-    def reader(self, reader_id):
-        while True:
-            # Entrada na seção crítica
-            with self.read_count_lock:
-                self.read_count += 1
-                if self.read_count == 1:
-                    self.resource_lock.acquire()
+# Solução 1: Prioridade para Leitores
+def reader_priority(reader_id):
+    global read_count
+    for _ in range(total_accesses):
+        # Entrada da região crítica
+        mutex.acquire()
+        read_count += 1
+        if read_count == 1:  # Primeiro leitor bloqueia os escritores
+            wrt.acquire()
+        mutex.release()
 
-            # Região crítica de leitura
-            print(f"Reader {reader_id} is reading.")
-            time.sleep(random.uniform(0.1, 0.5))
+        # Leitura
+        print(f"Leitor {reader_id} (Prioridade Leitores) está lendo.")
+        time.sleep(random.uniform(0.1, 0.3))
 
-            # Saída da seção crítica
-            with self.read_count_lock:
-                self.read_count -= 1
-                if self.read_count == 0:
-                    self.resource_lock.release()
+        # Saída
+        mutex.acquire()
+        read_count -= 1
+        if read_count == 0:  # Último leitor libera a região crítica
+            wrt.release()
+        mutex.release()
 
-            time.sleep(random.uniform(0.1, 0.5))
+def writer_priority(writer_id):
+    for _ in range(total_accesses):
+        # Escritores esperam indefinidamente se houver leitores
+        wrt.acquire()
+        print(f"Escritor {writer_id} (Prioridade Leitores) está escrevendo.")
+        time.sleep(random.uniform(0.2, 0.4))
+        wrt.release()
 
-    def writer(self, writer_id):
-        while True:
-            # Escritor espera até que não haja leitores
-            self.resource_lock.acquire()
+# Solução 2: Acesso Justo - Resolvido para evitar starvation
+def fair_reader(reader_id):
+    global read_count
+    for _ in range(total_accesses):
+        with fair_lock:  # Escritores têm chance de adquirir o lock
+            mutex.acquire()
+            read_count += 1
+            if read_count == 1:
+                wrt.acquire()
+            mutex.release()
 
-            # Região crítica de escrita
-            print(f"Writer {writer_id} is writing.")
-            time.sleep(random.uniform(0.2, 0.6))
+        # Leitura
+        print(f"Leitor {reader_id} (Acesso Justo) está lendo.")
+        time.sleep(random.uniform(0.1, 0.3))
 
-            self.resource_lock.release()
-            time.sleep(random.uniform(0.2, 0.6))
+        # Saída
+        mutex.acquire()
+        read_count -= 1
+        if read_count == 0:
+            wrt.release()
+        mutex.release()
 
-# Solução 2: Evita espera indefinida para escritores
-class ReadersWritersSolution2:
-    def __init__(self):
-        self.read_count = 0
-        self.read_count_lock = threading.Lock()
-        self.resource_lock = threading.Lock()
-        self.writer_priority_lock = threading.Lock()
+def fair_writer(writer_id):
+    for _ in range(total_accesses):
+        with fair_lock:  # Escritores aguardam "justamente" na fila
+            wrt.acquire()
+            print(f"Escritor {writer_id} (Acesso Justo) está escrevendo.")
+            time.sleep(random.uniform(0.2, 0.4))
+            wrt.release()
 
-    def reader(self, reader_id):
-        while True:
-            with self.writer_priority_lock:
-                with self.read_count_lock:
-                    self.read_count += 1
-                    if self.read_count == 1:
-                        self.resource_lock.acquire()
+# Função principal para comparar as soluções
+def main():
+    num_readers = 5
+    num_writers = 3
 
-            print(f"Reader {reader_id} is reading.")
-            time.sleep(random.uniform(0.1, 0.5))
-
-            with self.read_count_lock:
-                self.read_count -= 1
-                if self.read_count == 0:
-                    self.resource_lock.release()
-
-            time.sleep(random.uniform(0.1, 0.5))
-
-    def writer(self, writer_id):
-        while True:
-            self.writer_priority_lock.acquire()
-            self.resource_lock.acquire()
-
-            print(f"Writer {writer_id} is writing.")
-            time.sleep(random.uniform(0.2, 0.6))
-
-            self.resource_lock.release()
-            self.writer_priority_lock.release()
-            time.sleep(random.uniform(0.2, 0.6))
-
-# Função principal para simulação
-def simulate_readers_writers(solution_class, num_readers=5, num_writers=2, duration=10):
-    solution = solution_class()
-
-    threads = []
+    # Solução 1: Prioridade para Leitores
+    print("\n=== Solução 1: Prioridade para Leitores ===")
+    threads1 = []
     for i in range(num_readers):
-        t = threading.Thread(target=solution.reader, args=(i + 1,))
-        threads.append(t)
-        t.start()
-
+        threads1.append(threading.Thread(target=reader_priority, args=(i + 1,)))
     for i in range(num_writers):
-        t = threading.Thread(target=solution.writer, args=(i + 1,))
-        threads.append(t)
-        t.start()
+        threads1.append(threading.Thread(target=writer_priority, args=(i + 1,)))
 
-    time.sleep(duration)
-    print("Simulation complete. Terminating threads...")
+    # Executa as threads da solução 1
+    for t in threads1:
+        t.start()
+    for t in threads1:
+        t.join()
+
+    # Solução 2: Acesso Justo para Evitar Starvation
+    print("\n=== Solução 2: Acesso Justo para Evitar Starvation ===")
+    threads2 = []
+    for i in range(num_readers):
+        threads2.append(threading.Thread(target=fair_reader, args=(i + 1,)))
+    for i in range(num_writers):
+        threads2.append(threading.Thread(target=fair_writer, args=(i + 1,)))
+
+    # Executa as threads da solução 2
+    for t in threads2:
+        t.start()
+    for t in threads2:
+        t.join()
+
+    print("\n=== Fim da Comparação ===")
 
 if __name__ == "__main__":
-    print("Running Readers-Writers Solution 1 (Writers may wait indefinitely)...")
-    simulate_readers_writers(ReadersWritersSolution1, duration=10)
-
-    print("\nRunning Readers-Writers Solution 2 (Writers avoid indefinite waiting)...")
-    simulate_readers_writers(ReadersWritersSolution2, duration=10)
+    main()
